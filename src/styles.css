@@ -6,7 +6,33 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; }
-main { max-width: 1180px; margin: 0 auto; padding: 48px 24px; }
+main { max-width: 1180px; margin: 0 auto; padding: 28px 24px 48px; }
+
+.topBar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 22px;
+}
+.languageSwitcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, .9);
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(17, 24, 39, .07);
+}
+.languageSwitcher svg { color: #5b6ee1; }
+.languageSwitcher span { color: #475569; font-size: 13px; font-weight: 900; padding-left: 2px; }
+.languageSwitcher button {
+  color: #475569;
+  background: #eef2ff;
+  padding: 9px 12px;
+  border-radius: 999px;
+}
+.languageSwitcher button.active { color: #fff; background: linear-gradient(135deg, #5b6ee1, #8b5cf6); }
 
 .hero {
   display: grid;
