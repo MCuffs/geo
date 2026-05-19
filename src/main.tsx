@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BarChart3, CheckCircle2, GitBranch, Languages, Lightbulb, Network, Search, ShieldCheck } from 'lucide-react';
-import { analyzeGeoRank, type GeoInput } from './lib/geo';
+import { BarChart3, CheckCircle2, GitBranch, Languages, Lightbulb, Network, Search, ShieldCheck, Sparkles } from 'lucide-react';
+import { analyzeGeoRank, buildOntologyMap, type GeoInput } from './lib/geo';
 import { getLanguageLabel, t, type Language } from './lib/i18n';
 import './styles.css';
 
@@ -14,13 +14,21 @@ const SAMPLE_INPUT: GeoInput = {
   customQueries: 'best customer support software for small SaaS\naffordable support tools for founders\nIntercom alternatives for startups\nbest live chat tools for indie hackers',
 };
 
-type Tab = 'overview' | 'evidence' | 'ontology';
+type Tab = 'overview' | 'details' | 'ontology';
 
 function parseCompetitors(value: string): string[] {
-  return value
-    .split(/[\n,]/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return value.split(/[\n,]/g).map((item) => item.trim()).filter(Boolean);
+}
+
+function statusText(score: number, language: Language): string {
+  if (language === 'ko') {
+    if (score >= 70) return '강함';
+    if (score >= 45) return '보통';
+    return '약함';
+  }
+  if (score >= 70) return 'Strong';
+  if (score >= 45) return 'Moderate';
+  return 'Weak';
 }
 
 function App() {
@@ -36,28 +44,17 @@ function App() {
 
   const copy = (key: Parameters<typeof t>[1]) => t(language, key);
   const result = useMemo(() => analyzeGeoRank(submitted), [submitted]);
+  const centerQuery = result.queries[0]?.query ?? submitted.customQueries.split('\n')[0] ?? submitted.category;
+  const map = useMemo(() => buildOntologyMap(result, centerQuery), [result, centerQuery]);
+  const mapNodes = useMemo(() => new Map([map.center, ...map.nodes].map((node) => [node.id, node])), [map]);
+  const topCompetitor = result.rankings.find((item) => item.brand !== result.target.brand);
+  const strongestQuery = result.target.evidence[0]?.query ?? centerQuery;
 
   function runAudit(event: React.FormEvent) {
     event.preventDefault();
-    setSubmitted({
-      brand,
-      website,
-      category,
-      useCases,
-      competitors: parseCompetitors(competitors),
-      customQueries,
-    });
+    setSubmitted({ brand, website, category, useCases, competitors: parseCompetitors(competitors), customQueries });
+    setTab('overview');
   }
-
-  const nodeColumns = useMemo(() => {
-    const columns = new Map<string, typeof result.ontology.nodes>();
-    result.ontology.nodes.forEach((node) => {
-      const list = columns.get(node.type) ?? [];
-      list.push(node);
-      columns.set(node.type, list);
-    });
-    return [...columns.entries()];
-  }, [result.ontology.nodes]);
 
   return (
     <main>
@@ -66,20 +63,14 @@ function App() {
           <Languages size={16} />
           <span>{copy('language')}</span>
           {(['ko', 'en'] satisfies Language[]).map((item) => (
-            <button
-              type="button"
-              key={item}
-              className={language === item ? 'active' : ''}
-              aria-pressed={language === item}
-              onClick={() => setLanguage(item)}
-            >
+            <button type="button" key={item} className={language === item ? 'active' : ''} aria-pressed={language === item} onClick={() => setLanguage(item)}>
               {getLanguageLabel(item)}
             </button>
           ))}
         </div>
       </header>
 
-      <section className="hero">
+      <section className="hero simpleHero">
         <div>
           <p className="eyebrow">{copy('eyebrow')}</p>
           <h1>{copy('heroTitle')}</h1>
@@ -92,67 +83,89 @@ function App() {
         </div>
       </section>
 
-      <section className="grid">
+      <section className="explainPanel">
+        <div>
+          <Sparkles size={20} />
+          <h2>{copy('plainTitle')}</h2>
+          <p>{copy('plainSubtitle')}</p>
+        </div>
+        <div className="explainSteps">
+          <article><span>01</span><strong>{copy('stepOneTitle')}</strong><p>{copy('stepOneText')}</p></article>
+          <article><span>02</span><strong>{copy('stepTwoTitle')}</strong><p>{copy('stepTwoText')}</p></article>
+          <article><span>03</span><strong>{copy('stepThreeTitle')}</strong><p>{copy('stepThreeText')}</p></article>
+        </div>
+      </section>
+
+      <section className="workspace">
         <form className="panel form" onSubmit={runAudit}>
           <h2><Search size={20} /> {copy('input')}</h2>
           <label>{copy('brandName')}<input value={brand} onChange={(event) => setBrand(event.target.value)} required /></label>
           <label>{copy('websiteUrl')}<input value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://example.com" /></label>
-          <label>{copy('category')}<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="customer support software" required /></label>
+          <label>{copy('category')}<input value={category} onChange={(event) => setCategory(event.target.value)} required /></label>
           <label>{copy('targetUseCases')}<textarea value={useCases} onChange={(event) => setUseCases(event.target.value)} rows={3} /></label>
-          <label>{copy('competitors')}<textarea value={competitors} onChange={(event) => setCompetitors(event.target.value)} rows={5} /></label>
-          <label>{copy('targetGeoQueries')}<textarea value={customQueries} onChange={(event) => setCustomQueries(event.target.value)} rows={5} /></label>
+          <label>{copy('competitors')}<textarea value={competitors} onChange={(event) => setCompetitors(event.target.value)} rows={4} /></label>
+          <label>{copy('targetGeoQueries')}<textarea value={customQueries} onChange={(event) => setCustomQueries(event.target.value)} rows={4} /></label>
           <button type="submit">{copy('runAudit')}</button>
         </form>
 
-        <section className="panel results">
-          <h2><BarChart3 size={20} /> {copy('result')}</h2>
-          <div className="scoreCard">
-            <span>{copy('yourGeoScore')}</span>
-            <strong>{result.target.score}</strong>
-            <small>{result.target.mentionProbability}% {copy('estimatedMentionProbability')} · {copy('averageRank')} #{result.target.averageEstimatedRank}</small>
-          </div>
-          <div className="tabs">
+        <section className="panel results simplifiedResults">
+          <div className="tabs topTabs">
             <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>{copy('overview')}</button>
-            <button type="button" className={tab === 'evidence' ? 'active' : ''} onClick={() => setTab('evidence')}>{copy('evidence')}</button>
-            <button type="button" className={tab === 'ontology' ? 'active' : ''} onClick={() => setTab('ontology')}>{copy('ontologyMap')}</button>
+            <button type="button" className={tab === 'details' ? 'active' : ''} onClick={() => setTab('details')}>{copy('detailsTab')}</button>
+            <button type="button" className={tab === 'ontology' ? 'active' : ''} onClick={() => setTab('ontology')}>{copy('ontologyTab')}</button>
           </div>
 
           {tab === 'overview' && (
-            <div>
-              <h3>{copy('competitorRanking')}</h3>
-              <div className="rankList">
-                {result.rankings.map((item, index) => (
-                  <div className={item.brand === submitted.brand ? 'rank target' : 'rank'} key={item.brand}>
-                    <span>#{index + 1}</span><strong>{item.brand}</strong><em>{item.score}/100</em>
-                  </div>
-                ))}
+            <div className="overviewScreen">
+              <div className="scoreHero">
+                <div>
+                  <p>{copy('simpleSummary')}</p>
+                  <strong>{result.target.score}</strong>
+                  <span>{copy('visibility')}: {statusText(result.target.score, language)}</span>
+                </div>
+                <small>{copy('simpleExplanation')}</small>
               </div>
-              <h3>{copy('topProofFor')} {submitted.brand}</h3>
-              <ul className="evidenceList">
-                {result.target.evidence.map((item) => (
-                  <li key={`${item.query}-${item.reason}`}>
-                    <CheckCircle2 size={16} />
-                    <div>
-                      <strong>{item.query}</strong>
-                      <span>{item.reason} · {copy('weight')} {item.weight}</span>
-                      <small>{item.proof.slice(0, 2).join(' ')}</small>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <div className="metricGrid">
+                <article><span>{copy('estimatedMentionProbability')}</span><strong>{result.target.mentionProbability}%</strong></article>
+                <article><span>{copy('rankVsCompetitors')}</span><strong>#{result.rankings.findIndex((item) => item.brand === result.target.brand) + 1}</strong></article>
+                <article><span>{copy('bestQuery')}</span><strong>{strongestQuery}</strong></article>
+                <article><span>{copy('needAttention')}</span><strong>{result.ontology.gaps.length}</strong></article>
+              </div>
+              <div className="plainColumns">
+                <section>
+                  <h3><BarChart3 size={18} /> {copy('whoIsWinning')}</h3>
+                  <div className="rankList compact">
+                    {result.rankings.slice(0, 5).map((item, index) => (
+                      <div className={item.brand === submitted.brand ? 'rank target' : 'rank'} key={item.brand}>
+                        <span>#{index + 1}</span><strong>{item.brand}</strong><em>{item.score}/100</em>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section>
+                  <h3><Lightbulb size={18} /> {copy('recommendedActions')}</h3>
+                  <div className="actions simpleActions">{result.recommendations.slice(0, 3).map((item) => <p key={item}>{item}</p>)}</div>
+                </section>
+              </div>
             </div>
           )}
 
-          {tab === 'evidence' && (
-            <div>
-              <h3><GitBranch size={18} /> {copy('evidenceLedger')}</h3>
-              <p className="helper">{copy('evidenceLedgerHelper')}</p>
-              <div className="ledgerList">
-                {result.evidenceLedger.slice(0, 18).map((item) => (
-                  <article key={`${item.source}-${item.relationship}-${item.observed}`}>
-                    <strong>{item.relationship}</strong>
-                    <span>{item.observed}</span>
-                    <small>{item.impact} {copy('confidence')} {item.confidence}</small>
+          {tab === 'details' && (
+            <div className="detailsScreen">
+              <h2><GitBranch size={20} /> {copy('detailsTitle')}</h2>
+              <p className="helper">{copy('showingTopProof')}</p>
+              <div className="queryGrid">
+                {result.queries.slice(0, 6).map((query) => (
+                  <article key={query.query}>
+                    <h3>{query.query}</h3>
+                    {query.evidence.slice(0, 3).map((item) => (
+                      <div className="miniRank" key={`${query.query}-${item.brand}`}>
+                        <strong>#{item.estimatedRank} {item.brand}</strong>
+                        <span>{copy('ontology')} {item.ontologyScore} · {copy('semantic')} {item.semanticScore}</span>
+                        <small>{item.reasons.join(' · ')}</small>
+                        <small className="proofLine">{copy('proof')}: {item.proof.slice(0, 2).join(' ')}</small>
+                      </div>
+                    ))}
                   </article>
                 ))}
               </div>
@@ -160,56 +173,51 @@ function App() {
           )}
 
           {tab === 'ontology' && (
-            <div>
-              <h3><Network size={18} /> {copy('keywordRelationshipMap')}</h3>
-              <p className="helper">{copy('keywordRelationshipMapHelper')}</p>
-              <div className="ontologyColumns">
-                {nodeColumns.map(([type, nodes]) => (
-                  <section key={type} className="nodeColumn">
-                    <h4>{type}</h4>
-                    {nodes.map((node) => <span className={`nodePill ${node.type}`} key={node.id}>{node.label}</span>)}
-                  </section>
-                ))}
+            <div className="ontologyScreen">
+              <div className="mapHeader">
+                <div>
+                  <h2><Network size={20} /> {copy('mapTitle')}</h2>
+                  <p>{copy('mapSubtitle')}</p>
+                </div>
+                <div className="mapLegend">
+                  <span>{copy('influenceLegend')}</span>
+                  <span>{copy('winnerLegend')}</span>
+                  <span>{copy('contextLegend')}</span>
+                </div>
               </div>
-              <div className="edgeList">
-                {result.ontology.edges.slice(0, 28).map((edge) => (
-                  <article key={`${edge.from}-${edge.to}-${edge.relation}`}>
-                    <strong>{edge.from} → {edge.to}</strong>
-                    <span>{edge.relation} · {copy('strength')} {edge.strength.toFixed(2)}</span>
-                    <small>{edge.evidence}</small>
-                  </article>
-                ))}
+              <div className="spiderMap">
+                <svg viewBox="0 0 100 100" role="img" aria-label={copy('keywordRelationshipMap')}>
+                  <defs>
+                    <radialGradient id="centerGlow"><stop offset="0%" stopColor="#828fff" stopOpacity="0.9" /><stop offset="100%" stopColor="#5e6ad2" stopOpacity="0" /></radialGradient>
+                    <filter id="glow"><feGaussianBlur stdDeviation="1.3" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                  </defs>
+                  <circle cx="50" cy="50" r="45" className="mapRing" />
+                  <circle cx="50" cy="50" r="35" className="mapRing" />
+                  <circle cx="50" cy="50" r="25" className="mapRing" />
+                  <circle cx="50" cy="50" r="18" fill="url(#centerGlow)" />
+                  {map.links.map((link, index) => {
+                    const from = mapNodes.get(link.from);
+                    const to = mapNodes.get(link.to);
+                    if (!from || !to) return null;
+                    return <line key={`${link.from}-${link.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} className={link.winner ? 'mapLink winner' : 'mapLink'} strokeWidth={0.25 + link.influence * 1.3} opacity={0.18 + link.influence * 0.62} />;
+                  })}
+                  {[map.center, ...map.nodes].map((node) => (
+                    <g key={node.id} filter={node.winner || node.ring === 'center' ? 'url(#glow)' : undefined}>
+                      <circle cx={node.x} cy={node.y} r={node.radius} className={`mapNode ${node.type} ${node.winner ? 'winner' : ''}`} />
+                      <text x={node.x} y={node.y + node.radius + 3.3} textAnchor="middle" className="mapLabel">{node.label.length > 24 ? `${node.label.slice(0, 24)}…` : node.label}</text>
+                    </g>
+                  ))}
+                </svg>
+              </div>
+              <div className="mapInsights">
+                <article><span>{copy('centerQuery')}</span><strong>{map.center.label}</strong></article>
+                <article><span>{copy('strongestSignals')}</span>{map.strongest.map((node) => <p key={node.id}>{node.label} · {Math.round(node.influence * 100)}%</p>)}</article>
+                <article><span>{copy('whyItMatters')}</span><p>{topCompetitor ? `${topCompetitor.brand}: ${topCompetitor.score}/100` : result.recommendations[0]}</p></article>
               </div>
             </div>
           )}
         </section>
       </section>
-
-      <section className="panel wide">
-        <h2><Lightbulb size={20} /> {copy('recommendedActions')}</h2>
-        <div className="actions">{result.recommendations.map((item) => <p key={item}>{item}</p>)}</div>
-      </section>
-
-      <section className="panel wide">
-        <h2>{copy('queryLevelProof')}</h2>
-        <div className="queryGrid">
-          {result.queries.map((query) => (
-            <article key={query.query}>
-              <h3>{query.query}</h3>
-              {query.evidence.slice(0, 5).map((item) => (
-                <div className="miniRank" key={`${query.query}-${item.brand}`}>
-                  <strong>#{item.estimatedRank} {item.brand}</strong>
-                  <span>{copy('ontology')} {item.ontologyScore} · {copy('semantic')} {item.semanticScore}</span>
-                  <small>{item.reasons.join(' · ')}</small>
-                  <small className="proofLine">{copy('proof')}: {item.proof.slice(0, 2).join(' ')}</small>
-                </div>
-              ))}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="methodology">{result.methodology.map((item) => <p key={item}>{item}</p>)}</section>
     </main>
   );
 }

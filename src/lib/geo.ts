@@ -65,6 +65,34 @@ export type QueryEvidence = {
   }>;
 };
 
+export type OntologyMapNode = {
+  id: string;
+  label: string;
+  type: OntologyNodeType | 'queryCenter';
+  x: number;
+  y: number;
+  radius: number;
+  influence: number;
+  score?: number;
+  winner?: boolean;
+  ring: 'center' | 'entity' | 'context' | 'signal';
+};
+
+export type OntologyMapLink = {
+  from: string;
+  to: string;
+  influence: number;
+  relation: string;
+  winner?: boolean;
+};
+
+export type OntologyMap = {
+  center: OntologyMapNode;
+  nodes: OntologyMapNode[];
+  links: OntologyMapLink[];
+  strongest: OntologyMapNode[];
+};
+
 export type GeoResult = {
   target: BrandScore;
   rankings: BrandScore[];
@@ -234,9 +262,7 @@ export function generateOntology(input: GeoInput): Ontology {
 function brandContext(input: GeoInput, brand: string): string {
   const isTarget = brand === input.brand;
   const domainTokens = input.website.replace(/^https?:\/\//, '').replace(/\..*$/, ' ');
-  if (isTarget) {
-    return [brand, domainTokens, input.category, input.useCases].join(' ');
-  }
+  if (isTarget) return [brand, domainTokens, input.category, input.useCases].join(' ');
   return [brand, input.category].join(' ');
 }
 
@@ -336,12 +362,7 @@ export function analyzeGeoRank(input: GeoInput): GeoResult {
       const bucket = perBrand.get(item.brand)!;
       bucket.scores.push(item.score);
       bucket.ranks.push(index + 1);
-      bucket.evidence.push({
-        query,
-        reason: item.reasons[0],
-        weight: Number(item.score.toFixed(3)),
-        proof: item.proof,
-      });
+      bucket.evidence.push({ query, reason: item.reasons[0], weight: Number(item.score.toFixed(3)), proof: item.proof });
     });
 
     return {
@@ -366,9 +387,7 @@ export function analyzeGeoRank(input: GeoInput): GeoResult {
         score: Math.round(rawScore * 100),
         mentionProbability: toProbability(rawScore),
         averageEstimatedRank: Number(average(bucket.ranks).toFixed(1)),
-        evidence: bucket.evidence
-          .sort((a, b) => b.weight - a.weight)
-          .slice(0, 6),
+        evidence: bucket.evidence.sort((a, b) => b.weight - a.weight).slice(0, 6),
       } satisfies BrandScore;
     })
     .sort((a, b) => b.score - a.score || a.averageEstimatedRank - b.averageEstimatedRank);
@@ -381,9 +400,7 @@ export function analyzeGeoRank(input: GeoInput): GeoResult {
     'Add structured homepage sections for category, ICP, use cases, pricing, alternatives, and integrations so retrieval systems can build stronger entity relationships.',
   ];
   if (ontology.gaps.length > 0) recommendations.unshift(ontology.gaps[0]);
-  if (topCompetitor && topCompetitor.score > target.score) {
-    recommendations.unshift(`${topCompetitor.brand} currently has stronger estimated GEO visibility; close the gap by creating evidence sources for the query relations where it wins.`);
-  }
+  if (topCompetitor && topCompetitor.score > target.score) recommendations.unshift(`${topCompetitor.brand} currently has stronger estimated GEO visibility; close the gap by creating evidence sources for the query relations where it wins.`);
 
   return {
     target,
@@ -397,5 +414,91 @@ export function analyzeGeoRank(input: GeoInput): GeoResult {
       'Rank scores combine ontology path strength, direct entity mention signals, semantic fallback, and category alignment. Each query includes proof strings showing which relationship edges contributed.',
       'A production version should replace submitted-context evidence with live LLM sampling, web retrieval, citation extraction, and third-party source authority scoring.',
     ],
+  };
+}
+
+function polarPoint(angle: number, radius: number): { x: number; y: number } {
+  return {
+    x: Number((50 + Math.cos(angle) * radius).toFixed(2)),
+    y: Number((50 + Math.sin(angle) * radius).toFixed(2)),
+  };
+}
+
+function ringForNode(type: OntologyNodeType): 'entity' | 'context' | 'signal' {
+  if (type === 'brand' || type === 'competitor') return 'entity';
+  if (type === 'category' || type === 'intent') return 'context';
+  return 'signal';
+}
+
+function radiusForRing(ring: 'entity' | 'context' | 'signal'): number {
+  if (ring === 'entity') return 26;
+  if (ring === 'context') return 35;
+  return 43;
+}
+
+export function buildOntologyMap(result: GeoResult, centerQuery?: string): OntologyMap {
+  const query = centerQuery || result.queries[0]?.query || 'Target query';
+  const center: OntologyMapNode = {
+    id: `queryCenter:${query}`,
+    label: query,
+    type: 'queryCenter',
+    x: 50,
+    y: 50,
+    radius: 11,
+    influence: 1,
+    ring: 'center',
+  };
+
+  const selectedQuery = result.queries.find((item) => item.query === query) ?? result.queries[0];
+  const entityNodes: OntologyMapNode[] = (selectedQuery?.evidence ?? result.rankings.map((rank) => ({ brand: rank.brand, ontologyScore: rank.score / 100, semanticScore: rank.score / 100, estimatedRank: rank.averageEstimatedRank, reasons: [], proof: [] })))
+    .slice(0, 6)
+    .map((item, index, list) => {
+      const rank = result.rankings.find((ranking) => ranking.brand === item.brand);
+      const isWinner = index === 0;
+      const point = polarPoint(-Math.PI / 2 + (Math.PI * 2 * index) / Math.max(1, list.length), radiusForRing('entity'));
+      const type: OntologyNodeType = item.brand === result.target.brand ? 'brand' : 'competitor';
+      const influence = Number(Math.max(item.ontologyScore, (rank?.score ?? 0) / 100).toFixed(2));
+      return { id: `${type}:${item.brand}`, label: item.brand, type, ...point, radius: isWinner ? 8 : 6, influence, score: rank?.score, winner: isWinner, ring: 'entity' };
+    });
+
+  const relatedEdges = result.ontology.edges.filter((edge) => edge.from === `query:${query}` || edge.to === `query:${query}`);
+  const contextSource = relatedEdges.length > 0 ? relatedEdges : result.ontology.edges.filter((edge) => edge.relation !== 'competes_with');
+  const contextNodes: OntologyMapNode[] = contextSource
+    .map((edge) => [edge.from, edge.to]).flat()
+    .filter((nodeId) => !nodeId.startsWith('query:'))
+    .map((nodeId) => result.ontology.nodes.find((node) => node.id === nodeId))
+    .filter((node): node is OntologyNode => Boolean(node))
+    .filter((node, index, list) => list.findIndex((item) => item.id === node.id) === index)
+    .slice(0, 10)
+    .map((node, index, list) => {
+      const ring = ringForNode(node.type);
+      const baseAngle = Math.PI / 7;
+      const point = polarPoint(baseAngle + (Math.PI * 2 * index) / Math.max(1, list.length), radiusForRing(ring));
+      const edge = contextSource.find((item) => item.from === node.id || item.to === node.id);
+      return { id: node.id, label: node.label, type: node.type, ...point, radius: 4 + node.weight * 4, influence: Number((edge?.strength ?? node.weight).toFixed(2)), ring };
+    });
+
+  const nodeMap = new Map<string, OntologyMapNode>();
+  [...entityNodes, ...contextNodes].forEach((node) => nodeMap.set(node.id, node));
+  const nodes = [...nodeMap.values()].map((node, index, list) => {
+    if (list.findIndex((other) => Math.abs(other.x - node.x) < 2 && Math.abs(other.y - node.y) < 2) !== index) {
+      return { ...node, x: Math.min(96, node.x + 4), y: Math.min(96, node.y + 4) };
+    }
+    return node;
+  });
+
+  const links: OntologyMapLink[] = [
+    ...nodes.map((node) => ({ from: center.id, to: node.id, influence: node.influence, relation: node.ring === 'entity' ? 'AI answer competition' : 'intent influence', winner: node.winner })),
+    ...result.ontology.edges
+      .filter((edge) => nodeMap.has(edge.from) && nodeMap.has(edge.to))
+      .slice(0, 18)
+      .map((edge) => ({ from: edge.from, to: edge.to, influence: Number(edge.strength.toFixed(2)), relation: edge.relation })),
+  ];
+
+  return {
+    center,
+    nodes,
+    links,
+    strongest: [...nodes].sort((a, b) => b.influence - a.influence).slice(0, 5),
   };
 }
